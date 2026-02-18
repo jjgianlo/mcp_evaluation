@@ -1,7 +1,8 @@
 [project]
 name = "mcp-evaluation"
+author = "Giovanni Scilio"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP evaluation harness"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
