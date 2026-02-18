@@ -1,4 +1,4 @@
-# MCP Evaluation Harness (v3)
+# MCP Evaluation Harness
 
 Thesis-grade evaluation harness for MCP (Model Context Protocol) servers, focusing on time-series forecasting tools.
 
