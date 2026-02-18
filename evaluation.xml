@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Evaluation Suite (Objective-Only) — Thesis-grade, criteria-driven
+
+Design principles:
+- Prompts are natural user requests (tool-agnostic).
+- Scoring is objective: required/forbidden tool calls + schema validation + argument/result assertions
+  + (where applicable) monotonicity / distinctness / recovery evidence + expected error types.
+- No keyword coverage checks (removed due to unreliability and lack of engineering).
+
+Notes:
+- Tool result payloads are assumed to follow the observed structure:
+  {
+    "success": true|false,
+    "metadata": {...},
+    "data": {
+      "data": {
+        "results": { "forecast": [...], "lower_bound": [...], "upper_bound": [...] },
+        ...
+      }
+    }
+  }
+-->
+
+<evaluation version="3" mode="objective_only">
+
+  <!-- ========================================================= -->
+  <!-- TASK 1: ZERO-SHOT INFERENCE (PRETRAINED)                   -->
+  <!-- ========================================================= -->
+  <task>
+    <task_id>1</task_id>
+    <task_name>Zero-Shot Inference with Metadata Lookup</task_name>
+
+    <prompt><![CDATA[
+I need a quick risk analysis for the 'Microsoft_Stock' dataset, but I do not have the details in front of me.
+
+Please identify the relevant fields needed for forecasting, then generate a probabilistic forecast for the next 10 days. I want the median prediction and a lower/upper bound corresponding to the 10th and 90th percentiles to gauge volatility.
+
+Please present the results in a 10-row table and add a short risk interpretation.
+    ]]></prompt>
+
+    <expected_tools>
+      <tool name="dataset_info" required="true" min_calls="1"/>
+      <tool name="chronos_inference_pretrained" required="true" min_calls="1"/>
+    </expected_tools>
+
+    <argument_assertions>
+      <assert tool="dataset_info" path="file_name" equals="Microsoft_Stock"/>
+
+      <assert tool="chronos_inference_pretrained" path="input_data.data.file_name" equals="Microsoft_Stock"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.forecast_horizon" equals="10"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.lower_quantile" equals="0.1"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.upper_quantile" equals="0.9"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.date_column" equals="Date"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.value_column" equals="Close"/>
+    </argument_assertions>
+
+    <output_assertions>
+      <assert tool="chronos_inference_pretrained" path="success" equals="true"/>
+      <assert tool="chronos_inference_pretrained" path="metadata.operation" equals="inference_pretrained"/>
+
+      <!-- Correct nested result paths -->
+      <assert tool="chronos_inference_pretrained" path="data.data.results.forecast" length="10"/>
+      <assert tool="chronos_inference_pretrained" path="data.data.results.lower_bound" length="10"/>
+      <assert tool="chronos_inference_pretrained" path="data.data.results.upper_bound" length="10"/>
+    </output_assertions>
+
+    <quantile_monotonic_checks>
+      <check tool="chronos_inference_pretrained"
+             lower_path="data.data.results.lower_bound"
+             median_path="data.data.results.forecast"
+             upper_path="data.data.results.upper_bound"/>
+    </quantile_monotonic_checks>
+
+    <should_fail_gracefully>false</should_fail_gracefully>
+  </task>
+
+
+  <!-- ========================================================= -->
+  <!-- TASK 2: FINE-TUNING JOB SUBMISSION                         -->
+  <!-- ========================================================= -->
+  <task>
+    <task_id>2</task_id>
+    <task_name>Fine-Tuning Job Submission</task_name>
+
+    <prompt><![CDATA[
+I want a custom forecasting model for the 'Household_Smart_Meter' dataset because it has strong daily and hourly patterns.
+
+Please first confirm the date and target column from the dataset metadata, then start a training/fine-tuning job with:
+- t5 architecture
+- a 24-hour forecast horizon
+- an email notification to admin@siemens-thesis.com when it completes
+
+Please return the job request ID and summarize the key training settings that were used.
+    ]]></prompt>
+
+    <expected_tools>
+      <tool name="dataset_info" required="true" min_calls="1"/>
+      <tool name="chronos_finetune" required="true" min_calls="1"/>
+    </expected_tools>
+
+    <argument_assertions>
+      <assert tool="dataset_info" path="file_name" equals="Household_Smart_Meter"/>
+
+      <assert tool="chronos_finetune" path="input_data.data.file_name" equals="Household_Smart_Meter"/>
+      <assert tool="chronos_finetune" path="input_data.forecast_horizon" equals="24"/>
+      <assert tool="chronos_finetune" path="input_data.date_column" equals="DATE"/>
+      <assert tool="chronos_finetune" path="input_data.value_column" equals="USAGE"/>
+      <assert tool="chronos_finetune" path="input_data.finetune_params.architecture" equals="t5"/>
+      <assert tool="chronos_finetune" path="input_data.finetune_params.email_receivers" contains="admin@siemens-thesis.com"/>
+    </argument_assertions>
+
+    <output_assertions>
+      <assert tool="chronos_finetune" path="success" equals="true"/>
+      <assert tool="chronos_finetune" path="metadata.operation" equals="finetune"/>
+      <assert tool="chronos_finetune" path="metadata.request_id" contains="finetune_"/>
+    </output_assertions>
+
+    <should_fail_gracefully>false</should_fail_gracefully>
+  </task>
+
+
+  <!-- ========================================================= -->
+  <!-- TASK 3: MODEL COMPARISON (FINETUNED vs PRETRAINED)      Please confirm that it is available (including which version you will use and details)   -->
+  <!-- ========================================================= -->
+  <task>
+    <task_id>3</task_id>
+    <task_name>Model Comparison (Fine-tuned vs. Pre-trained)</task_name>
+
+    <prompt><![CDATA[
+I have a specialized fine-tuned forecasting model named 'Microsoft_Forecaster'.
+
+Analyse the `versions` and `details` of the model, then generate a 7-day forecast for the 'Microsoft_Stock' dataset using:
+1) the fine-tuned model, and
+2) a reasonable pre-trained baseline model.
+
+Analyse dataset metadat and information and use the same target variable ('Close') for both and include uncertainty bounds (10th/90th percentiles) if they are available.
+
+After you have both forecasts, provide a concise comparison focusing on:
+(a) how wide/tight the uncertainty intervals are, and
+(b) how long each approach takes to run.
+    ]]></prompt>
+
+    <expected_tools>
+      <tool name="dataset_info" required="true" min_calls="1"/>
+      <tool name="model_versions" required="true" min_calls="1"/>
+      <tool name="model_details" required="true" min_calls="1"/>
+      <tool name="chronos_inference_finetuned" required="true" min_calls="1"/>
+      <tool name="chronos_inference_pretrained" required="true" min_calls="1"/>
+    </expected_tools>
+
+    <argument_assertions>
+      <assert tool="dataset_info" path="file_name" equals="Microsoft_Stock"/>
+
+      <assert tool="model_versions" path="model_name" equals="Microsoft_Forecaster"/>
+      <assert tool="model_details" path="model_name" equals="Microsoft_Forecaster"/>
+      <assert tool="model_details" path="model_version" equals="1"/>
+
+      <assert tool="chronos_inference_finetuned" path="input_data.data.file_name" equals="Microsoft_Stock" occurrence="last"/>
+      <assert tool="chronos_inference_finetuned" path="input_data.ft_model_name" equals="Microsoft_Forecaster" occurrence="last"/>
+      <assert tool="chronos_inference_finetuned" path="input_data.forecast_horizon" equals="7" occurrence="last"/>
+      <assert tool="chronos_inference_finetuned" path="input_data.date_column" equals="Date" occurrence="last"/>
+      <assert tool="chronos_inference_finetuned" path="input_data.value_column" equals="Close" occurrence="last"/>
+
+      <assert tool="chronos_inference_pretrained" path="input_data.data.file_name" equals="Microsoft_Stock" occurrence="last"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.forecast_horizon" equals="7" occurrence="last"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.date_column" equals="Date" occurrence="last"/>
+      <assert tool="chronos_inference_pretrained" path="input_data.value_column" equals="Close" occurrence="last"/>
+    </argument_assertions>
+
+    <output_assertions>
+      <assert tool="chronos_inference_finetuned" path="success" equals="true"/>
+      <assert tool="chronos_inference_pretrained" path="success" equals="true"/>
+
+      <!-- Correct nested result paths -->
+      <assert tool="chronos_inference_finetuned" path="data.data.results.forecast" length="7"/>
+      <assert tool="chronos_inference_finetuned" path="data.data.results.lower_bound" length="7"/>
+      <assert tool="chronos_inference_finetuned" path="data.data.results.upper_bound" length="7"/>
+
+      <assert tool="chronos_inference_pretrained" path="data.data.results.forecast" length="7"/>
+      <assert tool="chronos_inference_pretrained" path="data.data.results.lower_bound" length="7"/>
+      <assert tool="chronos_inference_pretrained" path="data.data.results.upper_bound" length="7"/>
+    </output_assertions>
+
+    <quantile_monotonic_checks>
+      <check tool="chronos_inference_finetuned"
+             lower_path="data.data.results.lower_bound"
+             median_path="data.data.results.forecast"
+             upper_path="data.data.results.upper_bound"/>
+      <check tool="chronos_inference_pretrained"
+             lower_path="data.data.results.lower_bound"
+             median_path="data.data.results.forecast"
+             upper_path="data.data.results.upper_bound"/>
+    </quantile_monotonic_checks>
+
+    <should_fail_gracefully>false</should_fail_gracefully>
+  </task>
+
+
+  <!-- ========================================================= -->
+  <!-- TASK 4: NEGATIVE TEST — MISSING DATASET                     -->
+  <!-- ========================================================= -->
+  <task>
+    <task_id>4</task_id>
+    <task_name>Error Handling: Missing Dataset (Negative Test with Filename Uncertainty)</task_name>
+
+    <prompt><![CDATA[
+I believe I uploaded a dataset about global precipitation for 2025, but I might have the filename slightly wrong.
+
+Please try a few reasonable filename variations (at least three) to see if you can locate it.
+
+If you still cannot find it, explain what happened in plain language and suggest concrete next steps (e.g., how I should verify the dataset name or confirm whether it was uploaded).
+    ]]></prompt>
+
+    <expected_tools>
+      <!-- Require multiple probes to validate uncertainty handling -->
+      <tool name="dataset_info" required="true" min_calls="3"/>
+    </expected_tools>
+
+    <forbidden_tools>chronos_inference_pretrained,chronos_inference_finetuned,chronos_finetune</forbidden_tools>
+
+    <distinct_checks>
+      <distinct tool="dataset_info" target="arguments" path="file_name" min_distinct="3"/>
+    </distinct_checks>
+
+    <output_assertions>
+      <assert tool="dataset_info" path="success" equals="false" occurrence="last"/>
+      <assert tool="dataset_info" path="error.type" contains="NotFound" occurrence="last"/>
+    </output_assertions>
+
+    <should_fail_gracefully>true</should_fail_gracefully>
+    <!-- Accept both canonical backend types and the harness classifier label -->
+    <expected_error_types>ResourceNotFoundError,DatasetNotFound,missing_dataset</expected_error_types>
+  </task>
+
+
+  <!-- ========================================================= -->
+  <!-- TASK 5: SEMANTIC ERROR RECOVERY — COLUMN MISMATCH           -->
+  <!-- ========================================================= -->
+  <task>
+    <task_id>5</task_id>
+    <task_name>Semantic Error Recovery: Column Mismatch During Training Submission</task_name>
+
+    <prompt><![CDATA[
+**Household_Smart_Meter:**
+This dataset contains time-series electricity usage from a residential smart meter over roughly one year. Each record describes an electricity consumption interval and related metadata (type, timestamps, units, cost, notes). It is suitable for forecasting and other time-series ML tasks.
+**Columns:**
+* `category` — type label for the record (electricity usage)
+* `date` — date for the observation (no full timestamp)
+* `start_time` — interval start time
+* `end_time` — interval end time
+* `consumption` — electricity consumption for the interval
+* `unit` — measurement unit
+* `price` — cost in currency
+* `comment` — optional notes / empty in most rows
+
+Please start a finetuning job for the 'Household_Smart_Meter' dataset to predict electricity comsumption (24-hour horizon and email notification to admin@siemens-thesis.com). **AVOID dataset_info! USE chronos_finetune ONLY!**
+    ]]></prompt>
+
+    <expected_tools>
+      <tool name="chronos_finetune" required="true" min_calls="2"/>
+    </expected_tools>
+
+    <requires_recovery>true</requires_recovery>
+
+    <argument_assertions>
+      <!-- First attempt: user's assumed (wrong) defaults -->
+      <assert tool="chronos_finetune" path="input_data.value_column" equals="consumption" occurrence="first"/>
+
+      <!-- Last attempt: corrected -->
+      <assert tool="chronos_finetune" path="input_data.value_column" equals="USAGE" occurrence="last"/>
+      <assert tool="chronos_finetune" path="input_data.forecast_horizon" equals="24" occurrence="last"/>
+      <assert tool="chronos_finetune" path="input_data.finetune_params.email_receivers" contains="admin@siemens-thesis.com" occurrence="last"/>
+    </argument_assertions>
+
+    <distinct_checks>
+      <distinct tool="chronos_finetune" target="arguments" path="input_data.value_column" min_distinct="2"/>
+    </distinct_checks>
+
+    <output_assertions>
+      <assert tool="chronos_finetune" path="success" equals="true" occurrence="last"/>
+      <assert tool="chronos_finetune" path="metadata.operation" equals="finetune" occurrence="last"/>
+      <assert tool="chronos_finetune" path="metadata.request_id" contains="finetune_" occurrence="last"/>
+    </output_assertions>
+
+    <should_fail_gracefully>false</should_fail_gracefully>
+  </task>
+
+</evaluation>
