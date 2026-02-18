@@ -6,7 +6,7 @@ Shared utility functions for the MCP evaluation harness:
 - JSON serialisation helper
 - JSON-path traversal
 - Backend error classification
-- Basic statistics helpers (mean, stdev, 95% CI)
+- Basic statistics helpers (mean, stdev)
 """
 
 from __future__ import annotations
@@ -159,14 +159,3 @@ def _mean(xs: list[float]) -> float:
 
 def _stdev(xs: list[float]) -> float:
     return statistics.stdev(xs) if len(xs) > 1 else 0.0
-
-
-def _ci95_mean(xs: list[float]) -> tuple[float, float]:
-    """Normal-approx 95% CI for mean; sufficient for descriptive reporting in this context."""
-    if not xs:
-        return (0.0, 0.0)
-    if len(xs) == 1:
-        return (xs[0], xs[0])
-    m = _mean(xs)
-    se = _stdev(xs) / (len(xs) ** 0.5)
-    return (m - 1.96 * se, m + 1.96 * se)

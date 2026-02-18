@@ -22,7 +22,7 @@ Notes:
   }
 -->
 
-<evaluation version="3" mode="objective_only">
+<evaluation mode="objective_only">
 
   <!-- ========================================================= -->
   <!-- TASK 1: ZERO-SHOT INFERENCE (PRETRAINED)                   -->
@@ -46,7 +46,6 @@ Please present the results in a 10-row table and add a short risk interpretation
 
     <argument_assertions>
       <assert tool="dataset_info" path="file_name" equals="Microsoft_Stock"/>
-
       <assert tool="chronos_inference_pretrained" path="input_data.data.file_name" equals="Microsoft_Stock"/>
       <assert tool="chronos_inference_pretrained" path="input_data.forecast_horizon" equals="10"/>
       <assert tool="chronos_inference_pretrained" path="input_data.lower_quantile" equals="0.1"/>

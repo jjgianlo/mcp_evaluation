@@ -17,7 +17,8 @@ from typing import Any
 
 from evaluator import _evaluate_assertions
 from models import Assertion, TaskCriteria, TaskResult, ToolInvocation
-from utils import _ci95_mean, _mean, _stdev
+from utils import _mean, _stdev # TODO DELETE CI
+import pandas as pd
 
 
 # =========================
@@ -215,34 +216,101 @@ def compute_task_level_summary(all_runs: list[list[TaskResult]]) -> list[dict[st
 
     summary: list[dict[str, Any]] = []
     for tid, rs in sorted(by_task.items(), key=lambda kv: kv[0]):
-        lat = [r.timing_breakdown.total_latency for r in rs]
-        tok = [r.token_usage.get("total", 0) for r in rs]
-        obj = [1 if (r.success_assessment and r.success_assessment.objective_success) else 0 for r in rs]
-        overall = [1 if (r.success_assessment and r.success_assessment.overall_success) else 0 for r in rs]
-        conf = [r.success_assessment.confidence for r in rs if r.success_assessment]
-        ci_lo, ci_hi = _ci95_mean(lat)
+        total_latencies = []
+        tool_latencies = []
+        lantency_shares = []
+        total_tokens = []
+        overall = []
+        tool_calls = []
+        for r in rs:
+            total_latency = r.timing_breakdown.total_latency
+            tool_latency = r.timing_breakdown.tool_execution_latency
+            latency_share = (tool_latency / total_latency) if total_latency > 0 else 0.0
+            total_latencies.append(total_latency)
+            tool_latencies.append(tool_latency)
+            lantency_shares.append(latency_share)
+            total_tokens.append(float(r.token_usage.get("total", 0)))
+            overall.append(1 if (r.success_assessment and r.success_assessment.overall_success) else 0)
+            tool_calls.append(len(r.tool_invocations))
 
         summary.append(
             {
                 "task_id": tid,
                 "n": len(rs),
-                "objective_success_rate": _mean(obj),
                 "overall_success_rate": _mean(overall),
-                "latency_mean_s": _mean(lat),
-                "latency_stdev_s": _stdev(lat),
-                "latency_ci95_low_s": ci_lo,
-                "latency_ci95_high_s": ci_hi,
-                "tokens_mean": _mean([float(x) for x in tok]),
-                "tokens_max": max(tok) if tok else 0,
-                "avg_confidence": _mean(conf),
-                "verification_required_count": sum(
-                    1
-                    for r in rs
-                    if r.success_assessment and r.success_assessment.verification_required
-                ),
+                "latency_mean_s": _mean(total_latencies),
+                "latency_stdev_s": _stdev(total_latencies),
+                "tool_share_mean": _mean(lantency_shares),
+                "tokens_mean": _mean(total_tokens),
+                "len_tool_calls_mean": _mean(tool_calls),
             }
         )
     return summary
+
+def analyze_token_costs(total_prompt_tokens,
+    total_completion_tokens,
+    total_runs):
+    """
+    Analyze token usage and calculate costs for different LLM models.
+    
+    Parameters:
+    total_prompt_tokens (int): Total number of prompt tokens used across all runs.
+    total_completion_tokens (int): Total number of completion tokens used across all runs.
+    total_runs (int): Total number of runs executed.
+    
+    Returns:
+    str: Markdown formatted report
+    """
+
+    # Define pricing per million tokens (MTok)
+    pricing = {
+        'GLM-4.7': {
+            'input': 0.6,   # $ per MTok
+            'output': 2.2   # $ per MTok
+        },
+        'GPT-5.2': {
+            'input': 1.75,   # $ per MTok
+            'output': 14.00  # $ per MTok
+        },
+        'Claude Opus 4': {
+            'input': 15.00,  # $ per MTok
+            'output': 75.00  # $ per MTok
+        }
+    }
+    
+    # Calculate costs for each model
+    results = []
+    
+    for model_name, prices in pricing.items():
+        input_cost = (total_prompt_tokens / 1_000_000) * prices['input']
+        output_cost = (total_completion_tokens / 1_000_000) * prices['output']
+        total_cost = input_cost + output_cost
+        cost_per_run = total_cost / total_runs
+        
+        results.append({
+            'Model': model_name,
+            'Input Price': f"${prices['input']:.2f}/MTok",
+            'Output Price': f"${prices['output']:.2f}/MTok",
+            'Total Cost': f"${total_cost:.2f}",
+            'Avg. Cost/Task': f"${cost_per_run:.2f}"
+        })
+    
+    # Create DataFrame
+    summary_df = pd.DataFrame(results)
+    
+    # Build markdown report
+    md_lines = []        
+    
+    # Model Cost Comparison
+    md_lines.append("## Model Token Cost Comparison")
+    md_lines.append("")
+    md_lines.append(summary_df.to_markdown(index=False))
+    md_lines.append("")
+    
+    # Footer
+    md_lines.append("---")
+    
+    return "\n".join(md_lines)
 
 
 def render_markdown_summary(
@@ -252,20 +320,48 @@ def render_markdown_summary(
     all_runs: list[list[TaskResult]],
     evaluation_xml: Path,
 ) -> str:
-    total = sum(len(r) for r in all_runs)
-    overall_successes = sum(
-        1
-        for run in all_runs
-        for r in run
-        if r.success_assessment and r.success_assessment.overall_success
-    )
-    objective_successes = sum(
-        1
-        for run in all_runs
-        for r in run
-        if r.success_assessment and r.success_assessment.objective_success
-    )
-    tokens_total = sum(r.token_usage.get("total", 0) for run in all_runs for r in run)
+    total = 0
+    overall_successes = 0
+    tokens_total = 0
+    prompt_tokens_total = 0
+    completion_tokens_total = 0
+    total_tool_calls = []
+    total_latencies = []
+    llm_latency_total = 0
+    tool_latency_total = 0
+    additional_mcp_latency = 0
+    recovery_time_total = []
+    
+
+    for run in all_runs:
+        for task in run:
+            total += 1
+            overall_successes +=  int(task.success_assessment and task.success_assessment.overall_success)
+            tokens_total += task.token_usage.get("total", 0)
+            tool_invocations = task.tool_invocations
+            total_tool_calls.append(len(tool_invocations))
+            total_latencies.append(task.timing_breakdown.total_latency)
+            prompt_tokens_total += task.token_usage.get("prompt", 0)
+            completion_tokens_total += task.token_usage.get("completion", 0)
+            llm_latency_total += task.timing_breakdown.llm_reasoning_latency
+            tool_latency_total += task.timing_breakdown.tool_execution_latency
+            if task.task_id == 5:
+                for e in task.error_events:
+                    if (
+                        e.was_recovered
+                        and e.recovered_elapsed_s is not None
+                        and e.error_elapsed_s is not None):
+                        recovery_time_total.append(e.recovered_elapsed_s - e.error_elapsed_s) 
+
+            
+            
+            for tool_invocation in tool_invocations:
+                tool_name = tool_invocation.name
+                if tool_name != "dataset_info" and tool_invocation.result_data["success"]:  # Exclude dataset_info from latency comparison since dataset_info does not provide execution time in the backend response
+                    tool_exec_time = tool_invocation.execution_time
+                    backend_exec_time = tool_invocation.result_data["data"]["meta"]["execution_time"]
+                    additional_mcp_latency += abs(tool_exec_time - backend_exec_time)
+            
 
     out = []
     out.append(f"# MCP Evaluation Report\n")
@@ -273,22 +369,31 @@ def render_markdown_summary(
     out.append(f"Evaluation file: {evaluation_xml}\n")
     out.append("\n## Executive Summary\n")
     out.append(f"- Total task executions: {total}\n")
-    out.append(f"- Objective success rate: {objective_successes}/{total} ({(objective_successes/total*100 if total else 0):.1f}%)\n")
     out.append(f"- Overall success rate: {overall_successes}/{total} ({(overall_successes/total*100 if total else 0):.1f}%)\n")
-    out.append(f"- Total tokens: {tokens_total:,}\n")
+    avg_prompt_tokens = prompt_tokens_total/total
+    avg_completion_tokens = completion_tokens_total/total
+    avg_total_tokens = tokens_total/total
+    out.append(f"- Total tokens: {tokens_total:,} (avg. total: {avg_total_tokens:.0f}; avg. completion: {avg_completion_tokens:.0f}; avg. prompt: {avg_prompt_tokens:.0f})\n")
+    out.append(f"- Total latency: {sum(total_latencies):.2f}s (avg. {_mean(total_latencies):.2f}s per task; std. {_stdev(total_latencies):.2f})\n")
+    out.append(f"- LLM reasoning latency: {llm_latency_total:.2f}s (avg. {llm_latency_total/total:.2f}s per task)\n")
+    out.append(f"- Tool execution latency: {tool_latency_total:.2f}s (avg. {tool_latency_total/total:.2f}s per task)\n")
+    out.append(f"- Additional MCP latency (tool vs backend execution time): (avg. {additional_mcp_latency/total:.2f}s per task)\n")
+    out.append(f"- Total tool calls: {sum(total_tool_calls):,} (min: {min(total_tool_calls)}; max: {max(total_tool_calls)}; avg: {_mean(total_tool_calls)})\n")
+    out.append(f"- Average recovery time for task 5: {_mean(recovery_time_total):.2f}\n")
 
     out.append("\n## Task-Level Summary\n")
-    out.append("| Task | Name | Obj. Success | Overall Success | Mean Latency (s) | StdDev | 95% CI | Mean Tokens | Review Flags |\n")
-    out.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|\n")
+    out.append("| Task | Name | Overall Success | Mean Latency (s) | StdDev | Mean Tokens | Mean Tools | Tool Share |\n")
+    out.append("|---:|---|---:|---:|---:|---:|---:|---:|\n")
 
     name_by_id = {t.task_id: t.task_name for t in criteria}
     for s in task_summary:
         tid = s["task_id"]
-        ci = f"[{s['latency_ci95_low_s']:.2f}, {s['latency_ci95_high_s']:.2f}]"
         out.append(
-            f"| {tid} | {name_by_id.get(tid, '')} | {s['objective_success_rate']*100:.0f}% | {s['overall_success_rate']*100:.0f}% | "
-            f"{s['latency_mean_s']:.2f} | {s['latency_stdev_s']:.2f} | {ci} | {s['tokens_mean']:.0f} | {s['verification_required_count']} |\n"
+            f"| {tid} | {name_by_id.get(tid, '')} | {s['overall_success_rate']*100:.0f}% | "
+            f"{s['latency_mean_s']:.2f} | {s['latency_stdev_s']:.2f} | {s['tokens_mean']:,.0f} | | {s['len_tool_calls_mean']:.1f} | | {s['tool_share_mean']*100:.2f}% |\n"
         )
+
+    out.append(analyze_token_costs(prompt_tokens_total, completion_tokens_total, total))
 
     out.append("\n## Methodological Notes\n")
     out.append(
