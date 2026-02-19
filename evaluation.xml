@@ -129,11 +129,11 @@ Please return the job request ID and summarize the key training settings that we
     <prompt><![CDATA[
 I have a specialized fine-tuned forecasting model named 'Microsoft_Forecaster'.
 
-Analyse the `versions` and `details` of the model, then generate a 7-day forecast for the 'Microsoft_Stock' dataset using:
+Analyze the `versions` and `details` of the model, then generate a 7-day forecast for the 'Microsoft_Stock' dataset using:
 1) the fine-tuned model, and
 2) a reasonable pre-trained baseline model.
 
-Analyse dataset metadat and information and use the same target variable ('Close') for both and include uncertainty bounds (10th/90th percentiles) if they are available.
+Analyze dataset metadata and information and use the same target variable ('Close') for both and include uncertainty bounds (10th/90th percentiles) if they are available.
 
 After you have both forecasts, provide a concise comparison focusing on:
 (a) how wide/tight the uncertainty intervals are, and
@@ -253,7 +253,7 @@ This dataset contains time-series electricity usage from a residential smart met
 * `price` — cost in currency
 * `comment` — optional notes / empty in most rows
 
-Please start a finetuning job for the 'Household_Smart_Meter' dataset to predict electricity comsumption (24-hour horizon and email notification to admin@siemens-thesis.com). **AVOID dataset_info! USE chronos_finetune ONLY!**
+Please start a finetuning job for the 'Household_Smart_Meter' dataset to predict electricity consumption (24-hour horizon and email notification to admin@siemens-thesis.com). **AVOID dataset_info! USE chronos_finetune ONLY!**
     ]]></prompt>
 
     <expected_tools>
